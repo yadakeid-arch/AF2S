@@ -147,11 +147,15 @@ function frameOf(){
   else f%=n;
   return{row:m[a].row,col:f};
 }
-function respawn(){P.x=G.cp;P.y=groundAt(G.cp);P.vy=0;P.vx=0;P.state='idle';P.inv=1.5;P.barrier=0;P.bFade=0;P.power=0;P.blade=0;}
+function respawn(){P.dead=0;P.x=G.cp;P.y=groundAt(G.cp);P.vy=0;P.vx=0;P.state='idle';P.inv=1.5;P.barrier=0;P.bFade=0;P.power=0;P.blade=0;}
 function update(dt){
   if(!G.started)return;
   G.banner=Math.max(0,G.banner-dt);
   if(G.clear){G.clearT+=dt;updateFx(dt);return;}
+  if(P.dead>0){                          // dissolving: the world keeps moving, the player does not
+    P.dead-=dt;updateEnemies(dt);updateBoss(dt);updateBullets(dt);updateFx(dt);
+    if(P.dead<=0){P.hp=MAXHP;respawn();fx.push({k:'wave',x:P.x,y:P.y-80,t:0,s:0.7});}
+    return;}
   const L=keys.left,R=keys.right;
   // jump / double jump (also usable mid-swing in the air)
   if(keys.jump){keys.jump=false;
@@ -501,7 +505,7 @@ function drawBarrier(time){
   ctx.restore();
 }
 // ===== stage 3 boss: armoured swordsman on foot. Bullets + sword waves (3x damage)
-const ENEMY_BODY=3, BOSS_BODY=5;
+const ENEMY_BODY=2, BOSS_BODY=3;
 const BS3=2.75, WAVE_DMG=3, B_REACH=270, SL_T=0.22;
 function bossPivot(){return{x:B.x+B.face*28,y:B.y-165};}
 function bossSwordAng(){                     // radians in facing space: 0 = straight ahead, negative = up
@@ -528,11 +532,14 @@ function flameBlade(px,py,face,ang,blade,reach,time,str,trail){
     ctx.fillStyle=g;ctx.fill();}
   // flame tongue: tapered, flickering, from mid-blade to reach
   const seg=14;
-  for(const [wmul,col] of [[1.9,`rgba(100,40,230,${0.18*str})`],[1.25,`rgba(140,70,255,${0.32*str})`],[0.75,`rgba(190,120,255,${0.55*str})`],[0.32,`rgba(248,232,255,${0.95*str})`]]){
+  const r0=blade*0.12, bx0=px+c*r0, by0=py+sn*r0;
+  for(const [wmul,rgb,al] of [[1.9,'100,40,230',0.18],[1.25,'140,70,255',0.32],[0.75,'190,120,255',0.55],[0.32,'248,232,255',0.95]]){
+    const col=ctx.createLinearGradient(bx0,by0,px+c*reach,py+sn*reach);   // transparent at the hilt, full by ~a fifth of the length
+    col.addColorStop(0,`rgba(${rgb},0)`);col.addColorStop(0.1,`rgba(${rgb},${al*str*0.35})`);col.addColorStop(0.22,`rgba(${rgb},${al*str})`);col.addColorStop(1,`rgba(${rgb},${al*str})`);
     ctx.beginPath();
     const pts=[];
-    for(let k=0;k<=seg;k++){const r=blade*0.25+(reach-blade*0.25)*k/seg;
-      const taper=k/seg<0.35?1:1-(k/seg-0.35)/0.65*0.9;
+    for(let k=0;k<=seg;k++){const r=r0+(reach-r0)*k/seg;
+      const q=k/seg,taper=(q<0.35?1:1-(q-0.35)/0.65*0.9)*(q<0.14?0.55+0.45*q/0.14:1);
       const fl=(Math.sin(time/38+k*1.9)*9+Math.sin(time/23+k*3.1)*4)*(0.3+k/seg)*wmul;
       const w=(22*taper+4)*wmul;pts.push([px+c*r+nx*(w+fl),py+sn*r+ny*(w+fl),px+c*r-nx*(w-fl),py+sn*r-ny*(w-fl)]);}
     ctx.moveTo(pts[0][0],pts[0][1]);for(const p of pts)ctx.lineTo(p[0],p[1]);
@@ -544,10 +551,19 @@ function flameBlade(px,py,face,ang,blade,reach,time,str,trail){
   ctx.restore();
 }
 const waves=[];
+function killPlayer(){
+  P.hp=0;P.dead=1.7;P.deadFr=frameOf();P.deadFace=P.face;P.inv=99;P.barrier=0;P.bFade=0;P.vx=0;P.vy=0;
+  bullets.length=0;waves.length=0;flash=0.25;shake=0.3;sfx('boom',0.45);
+  fx.push({k:'wave',x:P.x,y:P.y-80,t:0,s:0.9});
+  for(let i=0;i<140;i++){const x=P.x+(Math.random()-.5)*56,y=P.y-Math.random()*150,a=Math.atan2(y-(P.y-80),x-P.x);
+    const sp=30+Math.random()*120;
+    fx.push({k:'mote',x,y,vx:Math.cos(a)*sp+(Math.random()-.5)*40,vy:Math.sin(a)*sp-40-Math.random()*60,t:0,
+      life:0.7+Math.random()*1.0,delay:Math.random()*0.35,r:1.5+Math.random()*2.5,c:Math.random()<0.25?'255,240,255':Math.random()<0.5?'200,140,255':'150,80,255'});}
+}
 function damagePlayer(n,dirx){
-  if(P.inv>0)return false;
+  if(P.inv>0||P.dead>0)return false;
   P.hp-=n;P.inv=1.2;P.state='hurt';P.t=0;P.vx=(dirx||-P.face)*(n>1?300:170);shake=n>1?0.35:0.15;
-  if(P.hp<=0){P.hp=MAXHP;bullets.length=0;waves.length=0;respawn();}
+  if(P.hp<=0)killPlayer();
   return true;
 }
 function segAt(x){let best=segs[0],bd=1e9;for(const s of segs){const d=x<s.x0?s.x0-x:x>s.x1?x-s.x1:0;if(d<bd){bd=d;best=s;}}return best;}
@@ -692,6 +708,7 @@ function updateBullets(dt){
   for(let i=bullets.length-1;i>=0;i--){
     const b=bullets[i];b.t+=dt;b.x+=b.vx*dt;b.y+=b.vy*dt;
     if(b.t>4||b.y>VH+60){bullets.splice(i,1);continue;}
+    if(P.dead>0)continue;
     if(P.barrier>0&&((b.x-P.x)/72)**2+((b.y-(P.y-84))/114)**2<1){
       bullets.splice(i,1);P.bHit=0.4;sparks(b.x,b.y,16,'#e2ccff');
       if(!P.bFade){P.barrier--;if(P.barrier<=0){P.barrier=1;P.bFade=0.9;}}
@@ -712,8 +729,9 @@ function updateFx(dt){
     if(p.k==='wave'){if(p.t>0.5)fx.splice(i,1);continue;}
     if(p.k==='pslash'){if(p.t>0.3)fx.splice(i,1);continue;}
     p.x+=p.vx*dt;p.y+=p.vy*dt;
-    if(p.k==='shard'){p.vy+=900*dt;p.r+=p.vr*dt;}else{p.vx*=0.92;p.vy*=0.92;}
-    if(p.t>p.life)fx.splice(i,1);}
+    if(p.k==='mote'){if(p.t<p.delay){p.x-=p.vx*dt;p.y-=p.vy*dt;}else{p.vx*=0.97;p.vy-=50*dt;}}
+    else if(p.k==='shard'){p.vy+=900*dt;p.r+=p.vr*dt;}else{p.vx*=0.92;p.vy*=0.92;}
+    if(p.t>p.life+(p.delay||0))fx.splice(i,1);}
 }
 function drawEnemies(time){
   for(const e of enemies){
@@ -762,6 +780,10 @@ function drawFx(){
     else if(p.k==='shard'){const a=1-p.t/p.life;ctx.save();ctx.globalAlpha=a;ctx.translate(x,y);ctx.rotate(p.r);
       ctx.fillStyle='#3a3542';ctx.strokeStyle='#8e86a0';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,-p.sz);ctx.lineTo(p.sz*0.35,0);ctx.lineTo(0,p.sz*0.6);ctx.lineTo(-p.sz*0.35,0);ctx.closePath();ctx.fill();ctx.stroke();
       ctx.fillStyle='rgba(170,110,255,.6)';ctx.fillRect(-1,-p.sz*0.4,2,p.sz*0.5);ctx.restore();}
+    else if(p.k==='mote'){if(p.t<p.delay)continue;const u=(p.t-p.delay)/p.life,a=u<0.15?u/0.15:1-(u-0.15)/0.85;
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      const g=ctx.createRadialGradient(x,y,0,x,y,p.r*3);g.addColorStop(0,`rgba(${p.c},${a})`);g.addColorStop(1,`rgba(${p.c},0)`);
+      ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,p.r*3,0,Math.PI*2);ctx.fill();ctx.restore();}
     else{const a=1-p.t/p.life;ctx.save();ctx.globalCompositeOperation='lighter';ctx.globalAlpha=a;ctx.strokeStyle=p.c;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x-p.vx*0.03,y-p.vy*0.03);ctx.stroke();ctx.restore();}
   }
 }
@@ -797,6 +819,14 @@ function draw(time){
   if(tint.width!==cw){tint.width=cw;tint.height=ch;}
   const px=P.x-camX, py=P.y;
   // contact shadow
+  if(P.dead>0){const el=1.7-P.dead;
+    if(el<0.55){const fr2=P.deadFr,u=el/0.55;
+      tcx.globalCompositeOperation='copy';tcx.drawImage(sheet,fr2.col*cw,fr2.row*ch,cw,ch,0,0,cw,ch);
+      tcx.globalCompositeOperation='source-atop';tcx.fillStyle='rgb(190,120,255)';tcx.fillRect(0,0,cw,ch);
+      ctx.save();ctx.translate(px,py);ctx.scale(P.deadFace*SC*(1+u*0.08),SC*(1+u*0.08));
+      ctx.globalAlpha=1-u;ctx.drawImage(sheet,fr2.col*cw,fr2.row*ch,cw,ch,-META.anchorX,-META.anchorY,cw,ch);
+      ctx.globalCompositeOperation='lighter';ctx.globalAlpha=(1-u)*0.9;ctx.drawImage(tint,-META.anchorX,-META.anchorY);ctx.restore();}
+  }else{
   drawBladeGlow(px,py,time);
   if(P.ground){ctx.fillStyle='rgba(0,0,0,.35)';ctx.beginPath();ctx.ellipse(px,py+2,38,7,0,0,Math.PI*2);ctx.fill();}
   ctx.save();ctx.translate(px,py);ctx.scale(P.face*SC,SC);
@@ -810,7 +840,8 @@ function draw(time){
     ctx.drawImage(tint,-META.anchorX,-META.anchorY);
     ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;}
   ctx.restore();
-  drawPlayerFlame(px,py,time); drawBarrier(time); drawLaser(time); drawWaves(time); drawBullets(); drawFx();
+  drawPlayerFlame(px,py,time);}
+  drawBarrier(time); drawLaser(time); drawWaves(time); drawBullets(); drawFx();
   // drifting debris & embers
   for(const m of motes){
     m.x-=m.v*0.016;m.y+=Math.sin(time/900+m.p)*0.2;if(m.x<-5){m.x=VW+5;m.y=Math.random()*VH;}
@@ -878,7 +909,7 @@ titleEl.addEventListener('pointerdown',e=>{e.preventDefault();begin();});
 // ---- input
 const km={ArrowLeft:'left',KeyA:'left',Numpad4:'left',ArrowRight:'right',KeyD:'right',Numpad6:'right',ArrowUp:'jump',KeyW:'jump',Numpad8:'jump',Space:'attack',KeyC:'guard',KeyK:'guard',ShiftLeft:'shift',ShiftRight:'shift'};
 function startStage(n){buildLevel(n);
-  Object.assign(P,{x:300,vx:0,vy:0,face:1,state:'idle',t:0,hp:MAXHP,inv:0,jumps:0,barrier:0,bHit:0,bFade:0,bBoss:0,power:0,blade:0,slashFx:-1});P.y=segs[0].top;
+  Object.assign(P,{x:300,vx:0,vy:0,face:1,state:'idle',t:0,hp:MAXHP,inv:0,jumps:0,barrier:0,bHit:0,bFade:0,bBoss:0,power:0,blade:0,slashFx:-1,dead:0});P.y=segs[0].top;
   Object.assign(G,{bossOn:false,clear:false,clearT:0,cp:300,started:true,stage:n,banner:2.6,kills:0});
   playMusic('bgm');B=null;orb=null;enemies.length=0;bullets.length=0;waves.length=0;fx.length=0;spawnT=1.5;camX=0;}
 function resetGame(){P.score=0;startStage(1);}
