@@ -127,12 +127,12 @@ buildLevel(1);
 
 // ---- player
 const SC=1.12;
-const P={x:300,y:0,vx:0,vy:0,face:1,ground:false,state:'idle',t:0,lock:0,walkMode:false,tone:true,hp:5,inv:0,score:0,jumps:0,swing:0,barrier:0,bHit:0,bFade:0,bBoss:0,power:0,blade:0,slashFx:-1};
+const P={x:300,y:0,vx:0,vy:0,face:1,ground:false,state:'idle',t:0,lock:0,walkMode:false,tone:true,hp:10,inv:0,score:0,jumps:0,swing:0,barrier:0,bHit:0,bFade:0,bBoss:0,power:0,blade:0,slashFx:-1};
 const LAST_STAGE=3;
-const G={bossOn:false,clear:false,clearT:0,cp:300,started:false,stage:1,banner:2.6,kills:0};
+const G={over:false,overT:0,lives:3,bossOn:false,clear:false,clearT:0,cp:300,started:false,stage:1,banner:2.6,kills:0};
 let orb=null;
 const BOSS_X=300+3*2576;   // three stage-image widths to the right of the start
-const MAXHP=5;
+const MAXHP=10, START_LIVES=3;
 P.y=segs[0].top;
 const keys={};
 const FPS={walk:8,run:11,idle:5,attack:13,guard:12,hurt:10};
@@ -147,14 +147,20 @@ function frameOf(){
   else f%=n;
   return{row:m[a].row,col:f};
 }
+function loseLife(){
+  G.lives--;
+  if(G.lives<=0){G.lives=0;G.over=true;G.overT=0;P.dead=1e-4;P.hp=0;bullets.length=0;waves.length=0;fadeMusic(2.0);return;}
+  P.hp=MAXHP;respawn();fx.push({k:'wave',x:P.x,y:P.y-80,t:0,s:0.7});
+}
 function respawn(){P.dead=0;P.x=G.cp;P.y=groundAt(G.cp);P.vy=0;P.vx=0;P.state='idle';P.inv=1.5;P.barrier=0;P.bFade=0;P.power=0;P.blade=0;}
 function update(dt){
   if(!G.started)return;
   G.banner=Math.max(0,G.banner-dt);
+  if(G.over){G.overT+=dt;updateEnemies(dt);updateBoss(dt);updateFx(dt);return;}
   if(G.clear){G.clearT+=dt;updateFx(dt);return;}
   if(P.dead>0){                          // dissolving: the world keeps moving, the player does not
     P.dead-=dt;updateEnemies(dt);updateBoss(dt);updateBullets(dt);updateFx(dt);
-    if(P.dead<=0){P.hp=MAXHP;respawn();fx.push({k:'wave',x:P.x,y:P.y-80,t:0,s:0.7});}
+    if(P.dead<=0)loseLife();
     return;}
   const L=keys.left,R=keys.right;
   // jump / double jump (also usable mid-swing in the air)
@@ -188,7 +194,7 @@ function update(dt){
   P.ground=false;
   for(const s of segs){ if(P.x>=s.x0&&P.x<=s.x1&&P.y<=s.top+2&&ny>=s.top&&P.vy>=0){P.y=s.top;P.vy=0;P.ground=true;P.jumps=0;break;} }
   if(!P.ground)P.y=ny;
-  if(P.y>VH+300)respawn();
+  if(P.y>VH+300){P.inv=0;loseLife();if(G.over)return;}
   if(!G.bossOn&&P.x>=BOSS_X){G.bossOn=true;const ls=segs[segs.length-1];G.cp=Math.max(BOSS_X,ls.x0+120);spawnBoss();}
   updateEnemies(dt); updateBoss(dt); bodyContacts(); updateWaves(dt); updateBullets(dt); updateOrb(dt); updateFx(dt);
 }
@@ -268,7 +274,7 @@ function updateEnemies(dt){
       for(let j=bullets.length-1;j>=0;j--){const b=bullets[j];if(b.x>x0&&b.x<x1&&b.y>y0&&b.y<y1){sparks(b.x,b.y,10,'#c9a2ff');bullets.splice(j,1);}}
       if(B&&B.type===3&&B.inv<=0&&B.state!=='dying'&&B.state!=='in'&&B.swing!==P.swing){
         const gy=B.y,bx0=B.x-70,bx1=B.x+70,by0=gy-290;
-        if(x0<bx1&&x1>bx0&&y0<gy&&y1>by0){B.swing=P.swing;hitBoss(P.blade?2:1);}
+        if(x0<bx1&&x1>bx0&&y0<gy&&y1>by0){B.swing=P.swing;hitBoss(1);}
       }
       else if(B&&B.type!==3&&B.inv<=0&&B.state!=='dying'&&B.swing!==P.swing){
         const cx=Math.max(x0,Math.min(x1,B.x)),cy=Math.max(y0,Math.min(y1,B.y));
@@ -330,6 +336,8 @@ function bodyContacts(){
 }
 function hitBoss(dmg){
   if(P.barrier>0&&!P.bFade&&++P.bBoss>=2)P.bFade=0.9;
+  if(P.blade&&++P.bladeHits>=2){P.blade=0;              // flaming sword burns out after two hits on the boss
+    for(let i=0;i<40;i++)fx.push({k:'mote',x:P.x+P.face*(20+Math.random()*120),y:P.y-60-Math.random()*90,vx:(Math.random()-.5)*80,vy:-40-Math.random()*80,t:0,life:0.6+Math.random()*0.6,delay:0,r:1.5+Math.random()*2,c:'190,120,255'});}
   B.hits=Math.min(3,B.hits+(dmg||1));B.inv=1.0;shake=0.2+(dmg>1?0.15:0);flash=0.18;sparks(B.x,B.type===3?B.y-130:B.y,dmg>1?70:40,'#e2ccff');
   if(B.hits>=3){sfx('bossboom',1);B.state='dying';B.t=0;B.at=0;B.boom=0;bullets.length=0;P.score++;return;}
   B.state='hurt';B.t=0;B.at=0;
@@ -481,7 +489,7 @@ function updateOrb(dt){
   if(P.bFade>0){P.bFade-=dt;if(P.bFade<=0){P.bFade=0;P.barrier=0;fx.push({k:'wave',x:P.x,y:P.y-84,t:0,s:0.9});sparks(P.x,P.y-84,50,'#b48cff');shake=0.15;}}
   if(!orb)return; orb.t+=dt;
   const u=Math.min(1,orb.t/1.2);orb.x=orb.sx+(orb.tx-orb.sx)*ease(u);orb.y=orb.sy+(orb.ty-orb.sy)*ease(u);
-  if(Math.hypot(P.x-orb.x,(P.y-80)-orb.y)<70&&orb.t>0.3){if(G.stage===1)P.power=1;else if(G.stage===3)P.blade=1;else{P.barrier=5;P.bFade=0;P.bBoss=0;}P.bHit=0.4;flash=0.3;sparks(orb.x,orb.y,40,'#d9b8ff');fx.push({k:'wave',x:P.x,y:P.y-80,t:0,s:0.8});orb=null;}
+  if(Math.hypot(P.x-orb.x,(P.y-80)-orb.y)<70&&orb.t>0.3){if(G.stage===1)P.power=1;else if(G.stage===3){P.blade=1;P.bladeHits=0;}else{P.barrier=5;P.bFade=0;P.bBoss=0;}P.bHit=0.4;flash=0.3;sparks(orb.x,orb.y,40,'#d9b8ff');fx.push({k:'wave',x:P.x,y:P.y-80,t:0,s:0.8});orb=null;}
 }
 function drawOrb(time){
   if(!orb)return;const x=orb.x-camX,y=orb.y+(orb.t>1.2?Math.sin(time/320)*7:0);
@@ -863,12 +871,21 @@ function draw(time){
     const last=G.stage>=LAST_STAGE;
     ctx.font='800 76px "Shippori Mincho B1",serif';ctx.fillText(last?'ALL CLEAR':'STAGE '+G.stage+' CLEAR',VW/2,VH/2-10);
     ctx.font='500 22px "Zen Kaku Gothic New",sans-serif';ctx.fillStyle='#b9b2c8';
-    ctx.fillText('撃破 '+P.score+'　　'+(last?'画面をタップ または Enter で最初から':'画面をタップ または Enter で STAGE '+(G.stage+1)+' へ'),VW/2,VH/2+44);
+    if(last){ctx.font='700 30px "Zen Kaku Gothic New",sans-serif';ctx.fillStyle='#e8dcc0';ctx.fillText('撃破数  '+P.score,VW/2,VH/2+52);
+      ctx.font='500 22px "Zen Kaku Gothic New",sans-serif';ctx.fillStyle='#b9b2c8';ctx.fillText('画面をタップ または Enter で最初から',VW/2,VH/2+98);}
+    else ctx.fillText('画面をタップ または Enter で STAGE '+(G.stage+1)+' へ',VW/2,VH/2+44);
     ctx.globalAlpha=1;ctx.textAlign='left';}
-  if(G.started&&G.banner>0&&!G.clear){const a=Math.min(1,G.banner/0.6,(2.6-G.banner)/0.4);
+  if(G.over){const a=Math.min(1,G.overT/1.4);
+    ctx.fillStyle=`rgba(10,4,16,${0.7*a})`;ctx.fillRect(0,0,VW,VH);
+    ctx.globalAlpha=a;ctx.textAlign='center';ctx.fillStyle='#d8c4f0';
+    ctx.font='800 80px "Shippori Mincho B1",serif';ctx.fillText('GAME OVER',VW/2,VH/2-14);
+    ctx.font='700 30px "Zen Kaku Gothic New",sans-serif';ctx.fillStyle='#e8dcc0';ctx.fillText('撃破数  '+P.score,VW/2,VH/2+48);
+    ctx.font='500 22px "Zen Kaku Gothic New",sans-serif';ctx.fillStyle='#b9b2c8';ctx.fillText('画面をタップ または Enter で最初から',VW/2,VH/2+94);
+    ctx.globalAlpha=1;ctx.textAlign='left';}
+  if(G.started&&G.banner>0&&!G.clear&&!G.over){const a=Math.min(1,G.banner/0.6,(2.6-G.banner)/0.4);
     ctx.globalAlpha=a;ctx.textAlign='center';ctx.fillStyle='#e8dcc0';ctx.font='800 64px "Shippori Mincho B1",serif';
     ctx.fillText('STAGE '+G.stage,VW/2,VH*0.36);ctx.globalAlpha=1;ctx.textAlign='left';}
-  hud.textContent='STAGE '+G.stage+'   HP '+'◆'.repeat(P.hp)+'◇'.repeat(MAXHP-P.hp)+'   撃破 '+P.score;
+  hud.textContent='HP '+'◆'.repeat(Math.max(0,P.hp))+'◇'.repeat(MAXHP-Math.max(0,P.hp))+'　　残機 '+G.lives;
 }
 let last=0;
 function loop(t){const dt=Math.min(0.033,(t-last)/1000||0.016);last=t;
@@ -915,12 +932,12 @@ titleEl.addEventListener('pointerdown',e=>{e.preventDefault();begin();});
 const km={ArrowLeft:'left',KeyA:'left',Numpad4:'left',ArrowRight:'right',KeyD:'right',Numpad6:'right',ArrowUp:'jump',KeyW:'jump',Numpad8:'jump',Space:'attack',KeyC:'guard',KeyK:'guard',ShiftLeft:'shift',ShiftRight:'shift'};
 function startStage(n){buildLevel(n);
   Object.assign(P,{x:300,vx:0,vy:0,face:1,state:'idle',t:0,hp:MAXHP,inv:0,jumps:0,barrier:0,bHit:0,bFade:0,bBoss:0,power:0,blade:0,slashFx:-1,dead:0});P.y=segs[0].top;
-  Object.assign(G,{bossOn:false,clear:false,clearT:0,cp:300,started:true,stage:n,banner:2.6,kills:0});
+  Object.assign(G,{over:false,overT:0,bossOn:false,clear:false,clearT:0,cp:300,started:true,stage:n,banner:2.6,kills:0});
   playMusic('bgm');B=null;orb=null;enemies.length=0;bullets.length=0;waves.length=0;fx.length=0;spawnT=1.5;camX=0;}
-function resetGame(){P.score=0;startStage(1);}
-function advance(){if(!G.clear||G.clearT<1)return;if(G.stage<LAST_STAGE)startStage(G.stage+1);else resetGame();}
+function resetGame(){P.score=0;G.lives=START_LIVES;startStage(1);}
+function advance(){if(G.over){if(G.overT>1.2)resetGame();return;}if(!G.clear||G.clearT<1)return;if(G.stage<LAST_STAGE)startStage(G.stage+1);else resetGame();}
 cv.addEventListener('pointerdown',advance);
-addEventListener('keydown',e=>{if(!G.started){if(!e.repeat)begin();return;}if((e.code==='KeyR'||e.code==='Enter'||e.code==='NumpadEnter')&&G.clear){advance();return;}const k=km[e.code];if(!k)return;e.preventDefault();if(e.repeat&&(k==='jump'||k==='attack'))return;keys[k]=true;});
+addEventListener('keydown',e=>{if(!G.started){if(!e.repeat)begin();return;}if((e.code==='KeyR'||e.code==='Enter'||e.code==='NumpadEnter')&&(G.clear||G.over)){advance();return;}const k=km[e.code];if(!k)return;e.preventDefault();if(e.repeat&&(k==='jump'||k==='attack'))return;keys[k]=true;});
 addEventListener('keyup',e=>{const k=km[e.code];if(!k)return;if(k!=='attack'&&k!=='hurt')keys[k]=false;if(k==='jump')keys.jump=false;});
 function hold(id,k){const b=document.getElementById(id);
   const on=e=>{e.preventDefault();if(!G.started){begin();return;}keys[k]=true;b.classList.add('on');try{b.setPointerCapture(e.pointerId)}catch(_){}};
