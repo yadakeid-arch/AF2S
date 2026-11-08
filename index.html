@@ -194,7 +194,14 @@ const ES=0.66, HOVER=320, E_R=42;           // scale, hover height above ground,
 const enemies=[], bullets=[], fx=[];
 let spawnT=1.5, shake=0, flash=0;
 function groundAt(x){for(const s of segs)if(x>=s.x0&&x<=s.x1)return s.top;return segs[0].top;}
+// patterns: 1 = hover & volley, 2 = dive attack, 3 = sine sweep with 3-way shots
+const PATS={1:[1],2:[1,2],3:[1,2,3]};
 function spawnEnemy(){
+  const list=PATS[G.stage]||[1], pat=list[Math.floor(Math.random()*list.length)];
+  if(pat===3){const dir=Math.random()<0.5?1:-1, x=camX+(dir>0?-80:VW+80);
+    enemies.push({pat,x,y:groundAt(P.x)-HOVER-40,by:groundAt(P.x)-HOVER-40,dir,state:'sweep',t:0,fireT:0.9,ring:0,seed:Math.random()*9,dist:0});return;}
+  if(pat===2){const side=Math.random()<0.5?-1:1, tx=Math.max(200,Math.min(LEVEL_W-200,P.x+P.face*(220+Math.random()*120)));
+    enemies.push({pat,x:tx-side*360,y:-180,sx:tx-side*360,sy:-180,tx,ty:groundAt(tx)-HOVER-30,dir:side,state:'in',t:0,ring:0,seed:Math.random()*9,vx:0,vy:0,hitP:false});return;}
   const side=Math.random()<0.5?-1:1;
   const tx=Math.max(200,Math.min(LEVEL_W-200,P.x+P.face*(180+Math.random()*160)));
   const ty=groundAt(tx)-HOVER;
@@ -206,6 +213,27 @@ function updateEnemies(dt){
   if(!G.bossOn&&spawnT<=0&&enemies.filter(e=>e.state!=='dead').length<2){spawnEnemy();spawnT=3.2+Math.random()*1.5;}
   for(let i=enemies.length-1;i>=0;i--){
     const e=enemies[i]; e.t+=dt; e.ring=Math.max(0,e.ring-dt*3);
+    if(e.pat===2&&e.state!=='hit'&&e.state!=='dead'){
+      if(e.state==='in'){const u=Math.min(1,e.t/1.0);e.x=e.sx+(e.tx-e.sx)*ease(u);e.y=e.sy+(e.ty-e.sy)*ease(u);if(u>=1){e.state='aim';e.t=0;}}
+      else if(e.state==='aim'){e.ring=0.5+0.5*Math.sin(e.t*30);e.y-=40*dt;
+        if(e.t>0.8){const dx=P.x-e.x,dy=(P.y-70)-e.y,l=Math.hypot(dx,dy)||1,sp=780;e.vx=dx/l*sp;e.vy=dy/l*sp;e.dir=Math.sign(dx)||1;e.state='dive';e.t=0;}}
+      else if(e.state==='dive'){
+        if(e.t>0.35)e.vy-=1500*dt;                 // pull up after passing the player
+        e.x+=e.vx*dt;e.y+=e.vy*dt;
+        if(!e.hitP&&Math.hypot(e.x-P.x,e.y-(P.y-80))<60){e.hitP=true;
+          const front=Math.sign(e.vx)===-P.face;
+          if(P.state==='guard'&&front){sparks(e.x,e.y,20,'#e8d7ff');shake=0.1;e.vx*=-0.6;e.vy=-500;}
+          else{sparks(P.x,P.y-80,20,'#ff9ad0');damagePlayer(1,Math.sign(e.vx));}}
+        if(e.y<-260||e.t>3)enemies.splice(i,1);}
+      continue;}
+    if(e.pat===3&&e.state==='sweep'){
+      e.dist+=150*dt;e.x+=e.dir*150*dt;e.y=e.by+Math.sin(e.t*2.4)*55;
+      e.fireT-=dt;
+      if(e.fireT<=0){e.fireT=1.3;e.ring=1;
+        const ox=e.x,oy=e.y+8,base=Math.atan2((P.y-85)-oy,P.x-ox);
+        for(const off of [-0.28,0,0.28])bullets.push({x:ox,y:oy,vx:Math.cos(base+off)*300,vy:Math.sin(base+off)*300,t:0});}
+      if(e.dist>VW+260)enemies.splice(i,1);
+      continue;}
     if(e.state==='in'){const u=Math.min(1,e.t/1.1);e.x=e.sx+(e.tx-e.sx)*ease(u);e.y=e.sy+(e.ty-e.sy)*ease(u);if(u>=1){e.state='hover';e.t=0;}}
     else if(e.state==='hover'){if(e.t>0.5){e.state='fire';e.t=0;e.shots=0;e.fireT=0.45;}}
     else if(e.state==='fire'){
@@ -228,7 +256,6 @@ function updateEnemies(dt){
     if(f>=3){
       const reach=P.blade?330:165, up=P.blade?320:240;
       const x0=Math.min(P.x-20*P.face,P.x+reach*P.face),x1=Math.max(P.x-20*P.face,P.x+reach*P.face),y0=P.y-up,y1=P.y-20;
-      if(P.blade&&P.slashFx!==P.swing){P.slashFx=P.swing;fx.push({k:'pslash',x:P.x,y:P.y-110,f:P.face,t:0});}
       for(const e of enemies){
         if(e.state==='hit'||e.state==='dead')continue;
         const cx=Math.max(x0,Math.min(x1,e.x)),cy=Math.max(y0,Math.min(y1,e.y));
@@ -417,7 +444,46 @@ function drawBarrier(time){
   ctx.restore();
 }
 // ===== stage 3 boss: armoured swordsman on foot. Bullets + sword waves (3x damage)
-const BS3=2.75, WAVE_DMG=3;
+const BS3=2.75, WAVE_DMG=3, B_REACH=270, SL_T=0.22;
+function bossPivot(){return{x:B.x+B.face*28,y:B.y-165};}
+function bossSwordAng(){                     // radians in facing space: 0 = straight ahead, negative = up
+  if(B.state==='windup')return -2.2+0.06*Math.sin(B.t*40);
+  if(B.state==='slash'){const u=Math.min(1,B.t/SL_T);return -2.2+(0.95+2.2)*(1-Math.pow(1-u,2));}
+  return 0.75;                               // resting: tip down and forward
+}
+function playerSwordAng(){
+  if(P.state!=='attack')return null;
+  const t=P.t; if(t<0.26)return -1.9;       // raised until the overhead frame, then the cut
+  const u=Math.min(1,(t-0.26)/0.11);return -1.9+(0.9+1.9)*(1-Math.pow(1-u,2));
+}
+// purple flame along a sword: core glow over the blade, flame continuing past the tip
+function flameBlade(px,py,face,ang,blade,reach,time,str,trail){
+  const c=Math.cos(ang)*face,sn=Math.sin(ang),nx=-sn,ny=c;   // direction and normal
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  if(trail){                                  // swept area of the swing
+    const a0=ang-trail,inner=reach*0.62;ctx.beginPath();
+    for(let k=0;k<=16;k++){const a=a0+(ang-a0)*k/16;ctx.lineTo(px+Math.cos(a)*face*reach,py+Math.sin(a)*reach);}
+    for(let k=16;k>=0;k--){const a=a0+(ang-a0)*k/16;ctx.lineTo(px+Math.cos(a)*face*inner,py+Math.sin(a)*inner);}
+    ctx.closePath();const g=ctx.createRadialGradient(px,py,inner,px,py,reach);
+    g.addColorStop(0,'rgba(150,80,255,0)');g.addColorStop(0.75,`rgba(170,100,255,${0.12*str})`);g.addColorStop(1,`rgba(225,180,255,${0.3*str})`);
+    ctx.fillStyle=g;ctx.fill();}
+  // flame tongue: tapered, flickering, from mid-blade to reach
+  const seg=14;
+  for(const [wmul,col] of [[1.9,`rgba(100,40,230,${0.18*str})`],[1.25,`rgba(140,70,255,${0.32*str})`],[0.75,`rgba(190,120,255,${0.55*str})`],[0.32,`rgba(248,232,255,${0.95*str})`]]){
+    ctx.beginPath();
+    const pts=[];
+    for(let k=0;k<=seg;k++){const r=blade*0.25+(reach-blade*0.25)*k/seg;
+      const taper=k/seg<0.35?1:1-(k/seg-0.35)/0.65*0.9;
+      const fl=(Math.sin(time/38+k*1.9)*9+Math.sin(time/23+k*3.1)*4)*(0.3+k/seg)*wmul;
+      const w=(22*taper+4)*wmul;pts.push([px+c*r+nx*(w+fl),py+sn*r+ny*(w+fl),px+c*r-nx*(w-fl),py+sn*r-ny*(w-fl)]);}
+    ctx.moveTo(pts[0][0],pts[0][1]);for(const p of pts)ctx.lineTo(p[0],p[1]);
+    const tip=reach+26+Math.sin(time/40)*14;ctx.lineTo(px+c*tip,py+sn*tip);
+    for(let k=pts.length-1;k>=0;k--)ctx.lineTo(pts[k][2],pts[k][3]);
+    ctx.closePath();ctx.fillStyle=col;ctx.fill();}
+  // embers drifting off the flame
+  if(Math.random()<0.5*str){const r=blade+Math.random()*(reach-blade);fx.push({k:'spark',x:px+c*r+camX,y:py+sn*r,vx:(Math.random()-.5)*60,vy:-60-Math.random()*80,t:0,life:0.35,c:'#c9a2ff'});}
+  ctx.restore();
+}
 const waves=[];
 function damagePlayer(n,dirx){
   if(P.inv>0)return false;
@@ -436,9 +502,16 @@ function updateBoss3(dt){
     case'run':{look();const sp=B.hits>=2?330:260;const[a0,a1]=arena();
       B.x=Math.max(a0-120,Math.min(a1+120,B.x+B.face*sp*dt));
       if(ad<250||B.t>2.2)go('windup');break;}
-    case'windup':if(B.t<0.2)look();if(B.t>(B.hits>=2?0.38:0.5)){go('slash');
-      waves.push({x:B.x+B.face*70,y:gy,vx:B.face*(B.hits>=2?640:540),t:0,hit:false});shake=0.15;sfx('swing',1);}break;
-    case'slash':if(B.t>0.45){B.act='fire';go('idle');}break;
+    case'windup':if(B.t<0.25)look();if(B.t>(B.hits>=2?0.4:0.55)){go('slash');B.slashHit=false;shake=0.12;sfx('swing',1);}break;
+    case'slash':{const a=bossSwordAng();
+      if(!B.slashHit&&B.t<SL_T){const pv=bossPivot();
+        for(let r=40;r<=B_REACH;r+=28){const qx=pv.x+B.face*Math.cos(a)*r,qy=pv.y+Math.sin(a)*r;
+          if(Math.abs(qx-P.x)<40&&qy>P.y-160&&qy<P.y+5){B.slashHit=true;
+            const front=B.face===-P.face;
+            if(P.state==='guard'&&front){sparks(qx,qy,30,'#e8d7ff');shake=0.25;P.x+=B.face*50;}
+            else{sparks(P.x,P.y-90,34,'#c9a2ff');damagePlayer(WAVE_DMG,B.face);}
+            break;}}}
+      if(B.t>SL_T+0.5){B.act='fire';go('idle');}break;}
     case'aim':{look();B.fireT-=dt;
       if(B.fireT<=0){const n=bossShots(),ox=B.x+B.face*30,oy=B.y-185,dx=P.x-ox,dy=(P.y-85)-oy;
         let ang=Math.atan2(dy,dx);if(n>4)ang+=((B.shots%3)-1)*0.15;
@@ -485,6 +558,11 @@ function drawBoss3(time){
   ctx.drawImage(im,-m.cx,-m.foot);
   if(B.state==='hurt'||enr){ctx.globalCompositeOperation='lighter';ctx.globalAlpha=B.state==='hurt'?0.45:0.2;ctx.drawImage(im,-m.cx,-m.foot);}
   ctx.restore();
+  if(B.state!=='dying'&&B.state!=='in'&&B.state!=='hurt'){
+    const pv=bossPivot(),a=bossSwordAng(),act=B.state==='windup'||B.state==='slash';
+    const reach=act?B_REACH:B_REACH*0.55;
+    flameBlade(pv.x-camX,pv.y,B.face,a,B_REACH*0.5,reach,time,act?1:0.45,B.state==='slash'&&B.t<SL_T+0.12?Math.min(2.4,B.t/SL_T*3.1):0);
+  }
 }
 function crescent(x,y,dir,h,a,core){
   ctx.save();ctx.translate(x,y);ctx.scale(dir,1);ctx.globalCompositeOperation='lighter';
@@ -498,6 +576,14 @@ function drawWaves(time){
     crescent(x,w.y-95,Math.sign(w.vx),88,a,'255,245,255');
     for(let j=1;j<4;j++)crescent(x-Math.sign(w.vx)*j*26,w.y-95,Math.sign(w.vx),88-j*10,a*0.25/j,'220,190,255');
     if(Math.random()<0.6)fx.push({k:'spark',x:w.x,y:w.y-20-Math.random()*150,vx:-w.vx*0.2,vy:-40,t:0,life:0.3,c:'#c9a2ff'});}
+}
+function drawPlayerFlame(px,py,time){
+  if(!P.blade)return;
+  const a=playerSwordAng();
+  if(a===null){                               // carried: shorter flame pointing down-forward
+    flameBlade(px+P.face*22,py-78,P.face,1.05,70,150,time,0.55,0);return;}
+  const sw=P.t>0.26&&P.t<0.48;
+  flameBlade(px+P.face*14,py-104,P.face,a,165,330,time,1,sw?Math.min(2.6,(P.t-0.26)/0.11*2.8):0);
 }
 function drawBladeGlow(px,py,time){                        // player sword aura while powered
   if(!P.blade)return;
@@ -545,7 +631,8 @@ function drawEnemies(time){
   for(const e of enemies){
     const x=e.x-camX,bob=Math.sin(time/450+e.seed)*6,y=e.y+bob;
     let k='eIdle';
-    if(e.state==='in'||e.state==='out')k='eMove';
+    if(e.state==='in'||e.state==='out'||e.state==='dive')k='eMove';
+    else if((e.state==='aim'&&e.ring>0.7)||(e.pat===3&&e.ring>0.4))k='eAtk';
     else if(e.state==='fire'&&(e.fireT<0.25||e.ring>0))k='eAtk';
     else if(e.state==='hit')k='eDmg';
     else if(e.state==='dead')k='eDeath';
@@ -553,10 +640,14 @@ function drawEnemies(time){
     // glow
     ctx.save();ctx.globalCompositeOperation='lighter';
     const gr=e.state==='fire'?70+e.ring*40:55, ga=(e.state==='dead'?Math.max(0,0.6-e.t):0.28+0.08*Math.sin(time/300+e.seed));
-    const g=ctx.createRadialGradient(x,y,0,x,y,gr*1.6);g.addColorStop(0,`rgba(170,110,255,${ga})`);g.addColorStop(1,'rgba(120,60,220,0)');
+    const gc=e.pat===2?'235,90,170':e.pat===3?'90,150,255':'170,110,255';
+    const g=ctx.createRadialGradient(x,y,0,x,y,gr*1.6);g.addColorStop(0,`rgba(${gc},${ga+(e.state==='aim'?0.25*e.ring:0)})`);g.addColorStop(1,`rgba(${gc},0)`);
     ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,gr*1.6,0,Math.PI*2);ctx.fill();ctx.restore();
     ctx.save();ctx.translate(x,y);
-    const flip=(k==='eMove'&&e.dir<0)?-1:1;
+    const flip=((k==='eMove'||e.pat===3)&&e.dir<0)?-1:1;
+    if(e.state==='dive'){ctx.rotate(Math.max(-0.6,Math.min(0.6,e.vx/1500)));
+      ctx.save();ctx.globalCompositeOperation='lighter';ctx.globalAlpha=0.35;ctx.fillStyle='rgba(235,90,170,1)';
+      ctx.beginPath();ctx.moveTo(-14,0);ctx.lineTo(14,0);ctx.lineTo(-e.vx*0.12,-e.vy*0.12);ctx.closePath();ctx.fill();ctx.restore();}
     let s=ES;
     if(e.state==='dead'){s*=1+e.t*0.5;ctx.globalAlpha=Math.max(0,1-e.t/0.7);}
     ctx.rotate(e.state==='dead'?0:Math.sin(time/700+e.seed)*0.05);
@@ -631,7 +722,7 @@ function draw(time){
     ctx.drawImage(tint,-META.anchorX,-META.anchorY);
     ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;}
   ctx.restore();
-  drawBarrier(time); drawLaser(time); drawWaves(time); drawBullets(); drawFx();
+  drawPlayerFlame(px,py,time); drawBarrier(time); drawLaser(time); drawWaves(time); drawBullets(); drawFx();
   // drifting debris & embers
   for(const m of motes){
     m.x-=m.v*0.016;m.y+=Math.sin(time/900+m.p)*0.2;if(m.x<-5){m.x=VW+5;m.y=Math.random()*VH;}
