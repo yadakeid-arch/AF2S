@@ -313,17 +313,20 @@ function contactHit(x,y,r,dirx){            // boss charging through the player
   damagePlayer(BOSS_BODY,dirx);
 }
 // distance from a point to the player's body box
+// distance from a vertical capsule (x, y0..y1, radius r) to the player's body box; <0 means touching
+function capHit(x,y0,y1,r){const dx=Math.max(0,Math.abs(x-P.x)-30),dy=Math.max(0,(P.y-150)-y1,y0-P.y);return Math.hypot(dx,dy)<r;}
 function bodyDist(x,y){const cx=Math.max(P.x-24,Math.min(P.x+24,x)),cy=Math.max(P.y-150,Math.min(P.y,y));return Math.hypot(x-cx,y-cy);}
 function bodyContacts(){
   if(P.inv>0)return;
   for(const e of enemies){
     if(e.state==='hit'||e.state==='dead')continue;
-    if(bodyDist(e.x,e.y)<36){sparks(P.x,P.y-80,24,'#ff9ad0');damagePlayer(ENEMY_BODY,Math.sign(P.x-e.x)||1);return;}
+    const bob=Math.sin(performance.now()/450+(e.seed||0))*6;          // same bob as the drawing
+    if(capHit(e.x,e.y+bob-70,e.y+bob+60,34)){sparks(P.x,P.y-80,24,'#ff9ad0');damagePlayer(ENEMY_BODY,Math.sign(P.x-e.x)||1);return;}
   }
   if(!B||B.state==='dying')return;
   if(B.type===3){
     if(Math.abs(P.x-B.x)<24+52&&P.y>B.y-250&&P.y-150<B.y){sparks(P.x,P.y-80,30,'#ff9ad0');damagePlayer(BOSS_BODY,Math.sign(P.x-B.x)||1);}
-  }else if(bodyDist(B.x,B.y)<(B.type===1?72:66)){sparks(P.x,P.y-80,30,'#ff9ad0');damagePlayer(BOSS_BODY,Math.sign(P.x-B.x)||1);}
+  }else if(B.type===1?capHit(B.x,B.y-120,B.y+110,50):capHit(B.x,B.y-70,B.y+90,70)){sparks(P.x,P.y-80,30,'#ff9ad0');damagePlayer(BOSS_BODY,Math.sign(P.x-B.x)||1);}
 }
 function hitBoss(dmg){
   if(P.barrier>0&&!P.bFade&&++P.bBoss>=2)P.bFade=0.9;
@@ -624,7 +627,7 @@ function updateBoss3(dt){
   }
 }
 function updateWaves(dt){
-  for(let i=waves.length-1;i>=0;i--){const w=waves[i];w.t+=dt;w.x+=w.vx*dt;
+  for(let i=waves.length-1;i>=0;i--){const w=waves[i];if(!w)continue;w.t+=dt;w.x+=w.vx*dt;
     if(w.t>2.4){waves.splice(i,1);continue;}
     if(!w.hit&&Math.abs(w.x-P.x)<55&&P.y>w.y-175){
       w.hit=true;const front=Math.sign(w.vx)===-P.face;
@@ -706,7 +709,7 @@ function drawBossBar(){
 function sparks(x,y,n,c){for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,s=80+Math.random()*420;fx.push({k:'spark',x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,t:0,life:0.3+Math.random()*0.45,c});}}
 function updateBullets(dt){
   for(let i=bullets.length-1;i>=0;i--){
-    const b=bullets[i];b.t+=dt;b.x+=b.vx*dt;b.y+=b.vy*dt;
+    const b=bullets[i];if(!b)continue;b.t+=dt;b.x+=b.vx*dt;b.y+=b.vy*dt;
     if(b.t>4||b.y>VH+60){bullets.splice(i,1);continue;}
     if(P.dead>0)continue;
     if(P.barrier>0&&((b.x-P.x)/72)**2+((b.y-(P.y-84))/114)**2<1){
@@ -868,7 +871,9 @@ function draw(time){
   hud.textContent='STAGE '+G.stage+'   HP '+'◆'.repeat(P.hp)+'◇'.repeat(MAXHP-P.hp)+'   撃破 '+P.score;
 }
 let last=0;
-function loop(t){const dt=Math.min(0.033,(t-last)/1000||0.016);last=t;update(dt);draw(t);requestAnimationFrame(loop);}
+function loop(t){const dt=Math.min(0.033,(t-last)/1000||0.016);last=t;
+  try{update(dt);draw(t);}catch(err){console.error(err);}   // one bad frame must never stop the game
+  requestAnimationFrame(loop);}
 function start(){requestAnimationFrame(loop);}
 
 
